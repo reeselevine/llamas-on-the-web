@@ -98,7 +98,7 @@ type ActiveModel = {
 };
 
 type PromptSelection = (typeof PROMPT_OPTIONS)[number]['id'] | 'manual';
-type RewriteStyle = 'pop song' | 'rap' | 'shakespearian sonnet';
+type RewriteStyle = 'pop song' | 'poem' | 'shakespearian sonnet';
 type RewriteState = {
   isLoading: boolean;
   style?: RewriteStyle;
@@ -123,6 +123,10 @@ type BenchmarkRunResult = {
 type BenchmarkResult = {
   runs: BenchmarkRunResult[];
   warning?: string;
+};
+type ActiveBenchmarkMetric = {
+  backend: BenchmarkBackend;
+  metric: 'prefill' | 'decode';
 };
 type LoadedModelSnapshot = {
   id: string;
@@ -153,18 +157,14 @@ const formatBenchmarkValue = (value: number) =>
 const getBenchmarkBackendLabel = (backend: BenchmarkBackend) =>
   backend === 'webgpu' ? 'WebGPU' : 'CPU';
 
-const buildRewriteMessages = (style: RewriteStyle): ChatMessage[] => {
-  const generationPrompt =
-    style === 'pop song'
-      ? 'Write one verse of a pop song about the benefits of running LLMs locally in the browser using WebGPU and llama.cpp.'
-      : style === 'rap'
-        ? 'Write one verse of a rap about the benefits of running LLMs locally in the browser using WebGPU and llama.cpp.'
-        : 'Write a short Shakespearian sonnet about the benefits of running LLMs locally in the browser using WebGPU and llama.cpp.';
-
+const buildRewriteMessages = (
+  paragraphText: string,
+  style: RewriteStyle
+): ChatMessage[] => {
   return [
     {
       role: 'user',
-      content: generationPrompt,
+      content: `${paragraphText}\n\Rewrite this as a ${style}.`,
     },
   ];
 };
@@ -211,6 +211,8 @@ function App() {
     null
   );
   const [benchmarkError, setBenchmarkError] = useState('');
+  const [activeBenchmarkMetric, setActiveBenchmarkMetric] =
+    useState<ActiveBenchmarkMetric | null>(null);
   const wllamaRef = useRef<Wllama | null>(null);
 
   const selectedModel =
@@ -541,6 +543,7 @@ function App() {
 
   const runBenchmark = async () => {
     setIsRunningBenchmark(true);
+    setActiveBenchmarkMetric(null);
     setBenchmarkError('');
     setStatus('Running benchmark...');
 
@@ -606,10 +609,18 @@ function App() {
         );
         await instance._testBenchmark('tg', BENCHMARK_WARMUP_DECODE_TOKENS);
 
+        setActiveBenchmarkMetric({
+          backend,
+          metric: 'prefill',
+        });
         const prefillResult = await instance._testBenchmark(
           'pp',
           prefillTokenCount
         );
+        setActiveBenchmarkMetric({
+          backend,
+          metric: 'decode',
+        });
         const decodeResult = await instance._testBenchmark(
           'tg',
           BENCHMARK_DECODE_TOKEN_COUNT
@@ -649,6 +660,7 @@ function App() {
               }
             : current
         );
+        setActiveBenchmarkMetric(null);
       }
       setStatus('Benchmark complete.');
     } catch (error) {
@@ -689,11 +701,16 @@ function App() {
           }`
         );
       }
+      setActiveBenchmarkMetric(null);
       setIsRunningBenchmark(false);
     }
   };
 
-  const rewriteParagraph = async (nodeId: string, style: RewriteStyle) => {
+  const rewriteParagraph = async (
+    nodeId: string,
+    paragraphText: string,
+    style: RewriteStyle
+  ) => {
     const instance = wllamaRef.current;
     if (!instance || loadedModelId !== activeModel.id) {
       setStatus('Load the selected model before generating a rewrite.');
@@ -712,7 +729,7 @@ function App() {
     }));
 
     try {
-      const rewriteMessages = buildRewriteMessages(style);
+      const rewriteMessages = buildRewriteMessages(paragraphText, style);
       const formattedPrompt = await formatChat(instance, rewriteMessages);
       let streamedText = '';
       console.info('[rewrite] rawPrompt', {
@@ -723,7 +740,7 @@ function App() {
       const result = await instance.createCompletion(formattedPrompt, {
         nPredict: maxOutputTokens,
         sampling: {
-          temp: 0.8,
+          temp: 0.3,
           top_k: 40,
           top_p: 0.9,
         },
@@ -868,12 +885,21 @@ function App() {
     </button>
   );
 
-  const formatBenchmarkMetricText = (run: BenchmarkRunResult | undefined, metric: 'prefill' | 'decode') =>
-    run && run.completed
+  const formatBenchmarkMetricText = (
+    run: BenchmarkRunResult | undefined,
+    metric: 'prefill' | 'decode'
+  ) => {
+    const isActiveMetric =
+      activeBenchmarkMetric !== null &&
+      activeBenchmarkMetric.backend === run?.backend &&
+      activeBenchmarkMetric.metric === metric;
+
+    return run && run.completed
       ? `${formatBenchmarkValue(run[metric].tokensPerSecond)} tok/s`
-      : isRunningBenchmark
+      : isActiveMetric
         ? 'Running...'
         : 'Waiting...';
+  };
 
   const renderBenchmarkCard = () => (
     <div className="benchmark-card">
@@ -895,8 +921,8 @@ function App() {
         </button>
       </div>
       <p className="advanced-note benchmark-note">
-        This benchmark runs the active model on CPU and, when available,
-        WebGPU. Each backend gets a warmup pass, then one measured run.
+        This set of benchmarks runs the active model on the CPU and, when available,
+        through WebGPU. Each benchmark gets a warmup pass, then one measured run.
       </p>
       <>
           <div className="benchmark-chart">
@@ -1019,7 +1045,7 @@ function App() {
     if (node.type === 'rewrite') {
       const rewriteState = rewriteOutputs[node.id];
       const selectedRewriteStyle =
-        rewriteSelections[node.id] ?? 'shakespearian sonnet';
+        rewriteSelections[node.id] ?? 'pop song';
       const displayedText = rewriteState?.text || node.text;
 
       return (
@@ -1052,7 +1078,7 @@ function App() {
                   }
                 >
                   <option value="pop song">Pop song</option>
-                  <option value="rap">Rap</option>
+                  <option value="poem">Poem</option>
                   <option value="shakespearian sonnet">
                     Shakespearian sonnet
                   </option>
@@ -1063,9 +1089,11 @@ function App() {
                   type="button"
                   className="inline-pill-button rewrite-button"
                   onClick={() => {
-                    rewriteParagraph(node.id, selectedRewriteStyle).catch(
-                      console.error
-                    );
+                    rewriteParagraph(
+                      node.id,
+                      node.text,
+                      selectedRewriteStyle
+                    ).catch(console.error);
                   }}
                   disabled={
                     isBusy ||

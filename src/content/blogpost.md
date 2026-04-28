@@ -3,7 +3,7 @@ title: Introducing WebGPU support for llama.cpp
 byline: April 2026
 ---
 
-After nearly a year of work, we're ready to introduce WebGPU support for llama.cpp. With this release, users can now run almost any open-weight model in their browser, _with GPU acceleration_, making fast and private LLM inference even more accessible and widely available than it ever has been before.
+After nearly a year of work, we're officially introducing WebGPU support for llama.cpp. With this release, users can now run almost any open-weight model in their browser, _with GPU acceleration_, making fast and private LLM inference even more accessible and widely available than it ever has been before.
 
 Skeptical about whether browser-based inference will work for you? Go ahead and try it out below:
 
