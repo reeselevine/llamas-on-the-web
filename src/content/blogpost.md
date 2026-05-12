@@ -1,5 +1,5 @@
 ---
-title: Introducing WebGPU support for llama.cpp
+title: Llamas on the Web: Introducing WebGPU support in llama.cpp
 byline: April 2026
 ---
 
@@ -15,14 +15,14 @@ You might be impresssed or underwhelmed by the demo above, depending on your exp
 
 That being said, local inference, and especially inference in the browser, is not going to solve all these problems immediately. WebGPU implementations are still maturing, and we ran into issues in the WebGPU implementations of every major browser ([1](https://github.com/gfx-rs/wgpu/issues/8896), [2](https://bugs.webkit.org/show_bug.cgi?id=311598), [3](https://issues.chromium.org/issues/504928024), [4](https://github.com/gpuweb/gpuweb/issues/5315)) while implementing WebGPU support for llama.cpp. Local models, especially in the sizes supported by mobile browsers, are not as capable as users might want, and browsers' same-origin policy means that if a model has been downloaded on one site, it will need to be downloaded again to be used on a different site. Nevertheless, we're still early, and the hope is that implementations like this one lead to demos and use-cases that can help influence the direction of local inference and browser support.
 
-### Disclaimer: Walking in the Footsteps of Giants
+### Disclaimer: Walking in the Footsteps of Others
 
 Before we go any further into the llama.cpp x WebGPU integration, we'd first like to acknowledge that we are not the first LLM inference runtime for WebGPU. [ONNX Runtime](https://onnxruntime.ai/) was one of the first machine learning frameworks to add web support, and its newer WebGPU backend helps power [Transformers.js](https://huggingface.co/docs/transformers.js/index). [WebLLM](https://webllm.mlc.ai/) brings the power of [TVM](https://tvm.apache.org/) to the browser, efficiently compiling models into deployable formats. In addition, llama.cpp can already be run through the browser, albeit without WebGPU support, using the existing [Wllama](https://github.com/ngxson/wllama) package. We are grateful to everyone involved in these efforts, as well as many others that we probably missed, for providing comparisons and starting points. We're looking forward to seeing the ecosystem around WebGPU and browser-based machine learning continue to evolve.
 
-## Llama.cpp x WebGPU
+## Llamas on the Web
 
 :::rewrite
-Now let's get into the exciting parts! First, as you've already seen in the demo above, you can now accelerate almost any model supported by llama.cpp using WebGPU, if your device and browser supports it. If you're reading this post, you're likely already aware that llama.cpp is already a popular choice for running local models on consumer hardware. With WebGPU support, that choice becomes even easier, as developers can integrate llama.cpp directly into their websites so that even completely non-technical users can benefit from fast, efficient, and private local models. 
+Now let's get into the exciting parts! First, as you've already seen in the demo above, you can now accelerate almost any model supported by llama.cpp using WebGPU, if your device and browser supports it. If you're reading this post, you're likely already aware that llama.cpp is already a popular choice for running local models on consumer hardware. With WebGPU support, that choice becomes even easier, as developers can integrate llama.cpp directly into their websites so that even completely non-technical users can benefit from fast, efficient, and private local models.
 :::
 
 If you were entertained by the above demo, feel free to copy the below and share it; we'd love some help sharing this fun project!
@@ -55,7 +55,7 @@ Additionally, we've been focusing on optimizing the WebGPU llama.cpp runtime as 
 
 ### Future Work and Technical Report
 
-Obviously there is a ton of juicy technical details that we didn't want to weigh down this release blog post with. If you're interested, we've released a technical report [here](TODO), which discusses more about kernel designs and gives performance numbers across different browsers, operating systems, models, etc. 
+Obviously there is a ton of juicy technical details that we didn't want to weigh down this release blog post with. If you're interested, we've released a technical report [here](TODO), which discusses more about kernel designs and gives performance numbers across different browsers, operating systems, models, etc.
 
 With this initial release we're just getting started. We're already starting to see more contributions to the WebGPU backend in llama.cpp, from improving the performance and portability of different operations, to support for multi-modal vision-language models, to initial kernel fusion implementations. We will also continue to work with browser vendors to find bugs in their implementations and find ways to increase our performance across many devices. While right now WebGPU support is in a fork of the original Wllama library, we will continue to work on integrating them into a single package. Within Wllama, we're currently working on techniques to reduce wasted memory usage, allowing smaller devices to run more powerful models, and are interested in investigating WebAssembly's 64-bit memory indexing to support even larger models on some devices.
 
