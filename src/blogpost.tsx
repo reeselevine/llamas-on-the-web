@@ -3,27 +3,41 @@ import rawBlogpost from './content/blogpost.md?raw';
 
 type BlogPostMeta = {
   title: string;
+  subtitle?: string;
   byline: string[];
+};
+
+export type Footnote = {
+  id: string;
+  text: string;
+  number: number;
 };
 
 export type BlogNode =
   | { type: 'heading'; level: 2 | 3; text: string }
   | { type: 'paragraph'; text: string }
   | { type: 'rewrite'; id: string; text: string }
+  | { type: 'callout'; text: string }
+  | { type: 'links'; items: string[] }
   | { type: 'demo' }
   | { type: 'benchmark' };
 
 export type BlogPost = {
   meta: BlogPostMeta;
   nodes: BlogNode[];
+  footnotes: Footnote[];
 };
 
 const FRONTMATTER_KEYS = {
   title: 'title',
+  subtitle: 'subtitle',
   byline: 'byline',
 } as const;
 
-const requiredMetaKeys = Object.values(FRONTMATTER_KEYS);
+const requiredMetaKeys = [
+  FRONTMATTER_KEYS.title,
+  FRONTMATTER_KEYS.byline,
+] as const;
 
 const parseFrontmatter = (
   source: string
@@ -57,9 +71,14 @@ const parseFrontmatter = (
   return { frontmatter, body };
 };
 
-const parseNodes = (body: string): BlogNode[] => {
+const FOOTNOTE_DEFINITION_REGEX = /^\[\^([^\]]+)\]:\s*(.*)$/;
+
+const parseNodes = (
+  body: string
+): { nodes: BlogNode[]; footnotes: Footnote[] } => {
   const lines = body.replace(/\r\n/g, '\n').split('\n');
   const nodes: BlogNode[] = [];
+  const footnotes: Footnote[] = [];
   let paragraphLines: string[] = [];
   let rewriteIndex = 0;
 
@@ -90,6 +109,48 @@ const parseNodes = (body: string): BlogNode[] => {
     if (trimmed === ':::benchmark') {
       flushParagraph();
       nodes.push({ type: 'benchmark' });
+      continue;
+    }
+
+    if (trimmed === ':::callout') {
+      flushParagraph();
+      const calloutLines: string[] = [];
+
+      while (i + 1 < lines.length) {
+        const nextLine = lines[i + 1];
+        i += 1;
+        if (nextLine.trim() === ':::') {
+          break;
+        }
+        calloutLines.push(nextLine.trim());
+      }
+
+      nodes.push({
+        type: 'callout',
+        text: calloutLines.join(' ').trim(),
+      });
+      continue;
+    }
+
+    if (trimmed === ':::links') {
+      flushParagraph();
+      const linkLines: string[] = [];
+
+      while (i + 1 < lines.length) {
+        const nextLine = lines[i + 1];
+        i += 1;
+        if (nextLine.trim() === ':::') {
+          break;
+        }
+        if (nextLine.trim()) {
+          linkLines.push(nextLine.trim());
+        }
+      }
+
+      nodes.push({
+        type: 'links',
+        items: linkLines,
+      });
       continue;
     }
 
@@ -127,11 +188,38 @@ const parseNodes = (body: string): BlogNode[] => {
       continue;
     }
 
+    const footnoteMatch = trimmed.match(FOOTNOTE_DEFINITION_REGEX);
+    if (footnoteMatch) {
+      flushParagraph();
+      const footnoteLines = [footnoteMatch[2].trim()];
+
+      while (i + 1 < lines.length) {
+        const nextLine = lines[i + 1];
+        if (!nextLine.trim()) {
+          break;
+        }
+
+        if (!/^(?:\t| {2,})/.test(nextLine)) {
+          break;
+        }
+
+        i += 1;
+        footnoteLines.push(nextLine.trim());
+      }
+
+      footnotes.push({
+        id: footnoteMatch[1].trim(),
+        text: footnoteLines.join(' ').trim(),
+        number: footnotes.length + 1,
+      });
+      continue;
+    }
+
     paragraphLines.push(trimmed);
   }
 
   flushParagraph();
-  return nodes;
+  return { nodes, footnotes };
 };
 
 const parseBlogPost = (source: string): BlogPost => {
@@ -149,12 +237,16 @@ const parseBlogPost = (source: string): BlogPost => {
     }
   }
 
+  const { nodes, footnotes } = parseNodes(body);
+
   return {
     meta: {
       title: rawMeta.title,
+      subtitle: rawMeta.subtitle,
       byline: rawMeta.byline.split('|').map((entry) => entry.trim()),
     },
-    nodes: parseNodes(body),
+    nodes,
+    footnotes,
   };
 };
 
@@ -163,10 +255,13 @@ const ESCAPED_UNDERSCORE_PLACEHOLDER = '\uE000';
 const restoreEscapedUnderscores = (text: string) =>
   text.replace(new RegExp(ESCAPED_UNDERSCORE_PLACEHOLDER, 'g'), '_');
 
-const renderInlineMarkdown = (text: string): ReactNode[] => {
+const renderInlineMarkdown = (
+  text: string,
+  footnoteNumbersById?: ReadonlyMap<string, number>
+): ReactNode[] => {
   const escapedText = text.replace(/\\_/g, ESCAPED_UNDERSCORE_PLACEHOLDER);
   const parts = escapedText.split(
-    /(`[^`]+`|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/
+    /(`[^`]+`|\[\^[^\]]+\]|\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/
   );
 
   return parts
@@ -188,6 +283,20 @@ const renderInlineMarkdown = (text: string): ReactNode[] => {
             {restoreEscapedUnderscores(linkMatch[1])}
           </a>
         );
+      }
+
+      const footnoteReferenceMatch = part.match(/^\[\^([^\]]+)\]$/);
+      if (footnoteReferenceMatch) {
+        const footnoteNumber = footnoteNumbersById?.get(
+          footnoteReferenceMatch[1].trim()
+        );
+        if (footnoteNumber !== undefined) {
+          return (
+            <sup key={index} className="footnote-reference">
+              <a href={`#footnote-${footnoteNumber}`}>{footnoteNumber}</a>
+            </sup>
+          );
+        }
       }
 
       if (
@@ -216,11 +325,28 @@ const renderInlineMarkdown = (text: string): ReactNode[] => {
     });
 };
 
+const buildPromptSource = (nodes: BlogNode[]) =>
+  nodes
+    .map((node) => {
+      if (node.type === 'heading') {
+        return `${'#'.repeat(node.level)} ${node.text}`;
+      }
+
+      if (
+        node.type === 'paragraph' ||
+        node.type === 'rewrite' ||
+        node.type === 'callout' ||
+        node.type === 'links'
+      ) {
+        return node.type === 'links' ? node.items.join(' ') : node.text;
+      }
+
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+
 export const blogPost = parseBlogPost(rawBlogpost);
-export const blogPostPromptSource = parseFrontmatter(rawBlogpost).body
-  .replace(/\n:::demo\n/g, '\n\n')
-  .replace(/\n:::benchmark\n/g, '\n\n')
-  .replace(/\n:::rewrite\n/g, '\n\n')
-  .replace(/\n:::\n/g, '\n\n')
-  .trim();
+export const blogPostPromptSource = buildPromptSource(blogPost.nodes);
 export { renderInlineMarkdown };

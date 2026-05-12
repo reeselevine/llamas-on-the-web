@@ -114,6 +114,7 @@ type BenchmarkBackend = 'cpu' | 'webgpu';
 type BenchmarkRunResult = {
   backend: BenchmarkBackend;
   backendLabel: string;
+  threadLabel?: string;
   completed: boolean;
   repetitions: number;
   promptTokens: number;
@@ -156,6 +157,9 @@ const formatBenchmarkValue = (value: number) =>
 
 const getBenchmarkBackendLabel = (backend: BenchmarkBackend) =>
   backend === 'webgpu' ? 'WebGPU' : 'CPU';
+
+const getBenchmarkThreadLabel = (instance: Wllama) =>
+  instance.isMultithread() ? 'multi-thread' : 'single-thread';
 
 const buildRewriteMessages = (
   paragraphText: string,
@@ -563,6 +567,7 @@ function App() {
         runs: benchmarkBackends.map((backend) => ({
           backend,
           backendLabel: getBenchmarkBackendLabel(backend),
+          threadLabel: undefined,
           completed: false,
           repetitions: BENCHMARK_REPETITIONS,
           promptTokens: Math.min(
@@ -629,6 +634,7 @@ function App() {
         const completedRun: BenchmarkRunResult = {
           backend,
           backendLabel: getBenchmarkBackendLabel(backend),
+          threadLabel: getBenchmarkThreadLabel(instance),
           completed: true,
           repetitions: BENCHMARK_REPETITIONS,
           promptTokens: prefillTokenCount,
@@ -819,7 +825,10 @@ function App() {
   const cachedDemoModels = DEMO_MODELS.filter((model) =>
     cachedModelUrls.includes(model.modelUrl)
   );
-  const { meta, nodes } = blogPost;
+  const { meta, nodes, footnotes } = blogPost;
+  const footnoteNumbersById = new Map(
+    footnotes.map((footnote) => [footnote.id, footnote.number] as const)
+  );
   const firstHeadingIndex = nodes.findIndex((node) => node.type === 'heading');
   const introNodes =
     firstHeadingIndex === -1 ? nodes : nodes.slice(0, firstHeadingIndex);
@@ -833,6 +842,7 @@ function App() {
       : (['cpu'] as BenchmarkBackend[])).map((backend) => ({
         backend,
         backendLabel: getBenchmarkBackendLabel(backend),
+        threadLabel: undefined,
         completed: false,
         repetitions: BENCHMARK_REPETITIONS,
         promptTokens: 256,
@@ -905,8 +915,8 @@ function App() {
     <div className="benchmark-card">
       <div className="benchmark-header">
         <div>
-          <span className="runtime-label">Micro-benchmark</span>
-          <h4>Single-pass prompt processing + token generation</h4>
+          <span className="runtime-label">Benchmark</span>
+          <h4>Prefill + Decode</h4>
           <p className="benchmark-model-name">{activeModel.name}</p>
         </div>
         <button
@@ -923,16 +933,22 @@ function App() {
       <p className="advanced-note benchmark-note">
         This set of benchmarks runs the active model on the CPU and, when available,
         through WebGPU. Each benchmark gets a warmup pass, then one measured run.
+        Prefill measures the speed at which the model can process the prompt and prepare for generation, while
+        decode measures the speed at which the model can generate tokens.
       </p>
       <>
           <div className="benchmark-chart">
             <div className="benchmark-chart-group">
               <div className="benchmark-chart-header">
-                <span className="runtime-label">Prompt Processing</span>
+                <span className="runtime-label">Prefill</span>
                 <span>{cpuBenchmarkRun?.prefill.tokens ?? webgpuBenchmarkRun?.prefill.tokens ?? 256} tokens</span>
               </div>
               <div className="benchmark-bar-row">
-                <span>CPU</span>
+                <span>
+                  {cpuBenchmarkRun?.threadLabel
+                    ? `CPU (${cpuBenchmarkRun.threadLabel})`
+                    : 'CPU'}
+                </span>
                 <div className="benchmark-bar-track" aria-hidden="true">
                   <div
                     className="benchmark-bar-fill cpu-fill"
@@ -960,11 +976,15 @@ function App() {
             </div>
             <div className="benchmark-chart-group">
               <div className="benchmark-chart-header">
-                <span className="runtime-label">Token Generation</span>
+                <span className="runtime-label">Decode</span>
                 <span>{cpuBenchmarkRun?.decode.tokens ?? webgpuBenchmarkRun?.decode.tokens ?? BENCHMARK_DECODE_TOKEN_COUNT} tokens</span>
               </div>
               <div className="benchmark-bar-row">
-                <span>CPU</span>
+                <span>
+                  {cpuBenchmarkRun?.threadLabel
+                    ? `CPU (${cpuBenchmarkRun.threadLabel})`
+                    : 'CPU'}
+                </span>
                 <div className="benchmark-bar-track" aria-hidden="true">
                   <div
                     className="benchmark-bar-fill cpu-fill"
@@ -1026,7 +1046,35 @@ function App() {
           key={`paragraph-${index}`}
           className="article-block article-paragraph"
         >
-          <p>{renderInlineMarkdown(node.text)}</p>
+          <p>{renderInlineMarkdown(node.text, footnoteNumbersById)}</p>
+        </section>
+      );
+    }
+
+    if (node.type === 'callout') {
+      return (
+        <section
+          key={`callout-${index}`}
+          className="article-block article-callout"
+        >
+          <div className="callout-box">
+            <p>{renderInlineMarkdown(node.text, footnoteNumbersById)}</p>
+          </div>
+        </section>
+      );
+    }
+
+    if (node.type === 'links') {
+      return (
+        <section
+          key={`links-${index}`}
+          className="article-block article-links"
+        >
+          <div className="links-box">
+            {node.items.map((item, itemIndex) => (
+              <p key={itemIndex}>{renderInlineMarkdown(item, footnoteNumbersById)}</p>
+            ))}
+          </div>
         </section>
       );
     }
@@ -1057,7 +1105,7 @@ function App() {
             {rewriteState?.text ? (
               <p className="rewrite-rendered">{displayedText}</p>
             ) : (
-              <p>{renderInlineMarkdown(node.text)}</p>
+              <p>{renderInlineMarkdown(node.text, footnoteNumbersById)}</p>
             )}
           </div>
           <aside className="rewrite-sidebar">
@@ -1517,6 +1565,7 @@ function App() {
     <div className="page-shell">
       <header className="blog-header">
         <h1>{meta.title}</h1>
+        {meta.subtitle ? <p className="blog-subtitle">{meta.subtitle}</p> : null}
         <div className="byline">
           {meta.byline.map((item) => (
             <span key={item}>{item}</span>
@@ -1535,6 +1584,18 @@ function App() {
           {articleNodes.map((node, index) =>
             renderArticleNode(node, introNodes.length + index)
           )}
+          {footnotes.length > 0 ? (
+            <section className="article-block article-footnotes">
+              <h3>Footnotes</h3>
+              <ol className="footnote-list">
+                {footnotes.map((footnote) => (
+                  <li key={footnote.id} id={`footnote-${footnote.number}`}>
+                    {renderInlineMarkdown(footnote.text, footnoteNumbersById)}
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ) : null}
         </article>
       </main>
     </div>
