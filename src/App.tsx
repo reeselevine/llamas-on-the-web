@@ -12,6 +12,7 @@ import {
 } from './config';
 import { formatChat, type ChatMessage } from './chat';
 import {
+  type BlogNode,
   blogPost,
   buildPromptSource,
   renderInlineMarkdown,
@@ -190,10 +191,58 @@ const buildPromptInput = (
   return "Write a function that computes the Nth fibonacci number recursively. Give usage for n=10, but don't try to calculate results manually, and don't explain the function.";
 };
 
+const SUMMARY_SECTION_TITLE = 'Llamas on the Web';
+const SUMMARY_SUBSECTION_TITLES = new Set([
+  'Functionality',
+  'Performance',
+  'Future Work and Technical Report',
+]);
+
+const buildSummaryPromptSource = (nodes: BlogNode[]) => {
+  const summaryNodes: BlogNode[] = [];
+  let inSummarySection = false;
+  let includeCurrentSubsection = true;
+
+  for (const node of nodes) {
+    if (node.type === 'heading' && node.level === 2) {
+      if (node.text === SUMMARY_SECTION_TITLE) {
+        inSummarySection = true;
+        includeCurrentSubsection = true;
+        summaryNodes.push(node);
+        continue;
+      }
+
+      if (inSummarySection) {
+        break;
+      }
+    }
+
+    if (!inSummarySection) {
+      continue;
+    }
+
+    if (node.type === 'heading' && node.level === 3) {
+      includeCurrentSubsection = SUMMARY_SUBSECTION_TITLES.has(node.text);
+      if (includeCurrentSubsection) {
+        summaryNodes.push(node);
+      }
+      continue;
+    }
+
+    if (includeCurrentSubsection) {
+      summaryNodes.push(node);
+    }
+  }
+
+  return buildPromptSource(summaryNodes);
+};
+
 function App() {
   const [selectedModelId, setSelectedModelId] = useState(DEFAULT_DEMO_MODEL_ID);
-  const [contextLength, setContextLength] = useState(4096);
+  const [contextLength, setContextLength] = useState(2048);
+  const [contextLengthInput, setContextLengthInput] = useState('4096');
   const [maxOutputTokens, setMaxOutputTokens] = useState(1024);
+  const [maxOutputTokensInput, setMaxOutputTokensInput] = useState('1024');
   const [selectedPromptId, setSelectedPromptId] = useState<PromptSelection>(
     PROMPT_OPTIONS[0].id
   );
@@ -236,6 +285,14 @@ function App() {
     useState<ActiveBenchmarkMetric | null>(null);
   const wllamaRef = useRef<Wllama | null>(null);
   const { meta, nodes, footnotes } = blogPost;
+
+  useEffect(() => {
+    setContextLengthInput(String(contextLength));
+  }, [contextLength]);
+
+  useEffect(() => {
+    setMaxOutputTokensInput(String(maxOutputTokens));
+  }, [maxOutputTokens]);
 
   const selectedModel =
     DEMO_MODELS.find((model) => model.id === selectedModelId) ??
@@ -528,7 +585,7 @@ function App() {
       const promptInput = buildPromptInput(
         selectedPromptId,
         manualPrompt,
-        buildPromptSource(nodes)
+        buildSummaryPromptSource(nodes)
       );
       const formattedPrompt = await formatChat(instance, [
         {
@@ -543,7 +600,7 @@ function App() {
       const result = await instance.createCompletion(formattedPrompt, {
         nPredict: maxOutputTokens,
         sampling: {
-          temp: 0.7,
+          temp: 0.2,
           top_k: 40,
           top_p: 0.9,
         },
@@ -1416,12 +1473,24 @@ function App() {
                       type="number"
                       min="1"
                       step="1"
-                      value={String(contextLength)}
-                      onChange={(event) =>
-                        setContextLength(
-                          Math.max(1, Number(event.target.value) || 1)
-                        )
-                      }
+                      value={contextLengthInput}
+                      onChange={(event) => {
+                        const { value } = event.target;
+                        setContextLengthInput(value);
+                        if (value === '') {
+                          return;
+                        }
+
+                        const nextValue = Number(value);
+                        if (Number.isFinite(nextValue) && nextValue >= 1) {
+                          setContextLength(Math.floor(nextValue));
+                        }
+                      }}
+                      onBlur={() => {
+                        if (contextLengthInput === '') {
+                          setContextLengthInput(String(contextLength));
+                        }
+                      }}
                       disabled={isBusy}
                     />
                   </label>
@@ -1441,12 +1510,24 @@ function App() {
                       type="number"
                       min="1"
                       step="1"
-                      value={String(maxOutputTokens)}
-                      onChange={(event) =>
-                        setMaxOutputTokens(
-                          Math.max(1, Number(event.target.value) || 1)
-                        )
-                      }
+                      value={maxOutputTokensInput}
+                      onChange={(event) => {
+                        const { value } = event.target;
+                        setMaxOutputTokensInput(value);
+                        if (value === '') {
+                          return;
+                        }
+
+                        const nextValue = Number(value);
+                        if (Number.isFinite(nextValue) && nextValue >= 1) {
+                          setMaxOutputTokens(Math.floor(nextValue));
+                        }
+                      }}
+                      onBlur={() => {
+                        if (maxOutputTokensInput === '') {
+                          setMaxOutputTokensInput(String(maxOutputTokens));
+                        }
+                      }}
                       disabled={isBusy}
                     />
                   </label>

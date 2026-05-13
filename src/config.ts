@@ -31,7 +31,7 @@ export const DEFAULT_DEMO_MODEL_ID = 'gemma-3-270m';
 export const PROMPT_OPTIONS = [
   {
     id: 'summarize-blogpost',
-    label: 'Summarize this blog post',
+    label: 'Summarize Llamas on the Web',
   },
   {
     id: 'fib-recursive',
