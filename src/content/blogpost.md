@@ -50,7 +50,7 @@ While you're welcome to roll your own frontend for llama.cpp, we have also integ
 
 ### Performance
 
-Of course, the main benefit of using WebGPU is its performance. And since seeing is believing, we invite you to run a micro-benchmark yourself below, which compares CPU and GPU performance on your machine:
+Of course, the main benefit of using WebGPU is its performance. And since seeing is believing, we invite you to run a benchmark yourself below, which compares CPU and GPU performance on your machine:
 
 :::benchmark
 
@@ -69,8 +69,6 @@ With this initial release, we're just getting started. We're already starting to
 ### More Demos
 
 We're interested in seeing how people start using browser-based inference. For a more full-featured chat interface using wllama, visit [this demo](https://reeselevine.github.io/wllama/). And if you make your own, feel free to let us know so we can add it here!
-
-<TODO: Did Nikhil have a demo to show?>
 
 ### Acknowledgements
 

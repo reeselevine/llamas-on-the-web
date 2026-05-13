@@ -1120,7 +1120,7 @@ function App() {
           }}
           disabled={isBusy}
         >
-          {isRunningBenchmark ? 'Running...' : 'Run comparison'}
+          {isRunningBenchmark ? 'Running...' : 'Run Benchmark'}
         </button>
       </div>
       <p className="advanced-note benchmark-note">
@@ -1131,7 +1131,17 @@ function App() {
       </p>
       <p className="advanced-warning benchmark-note">
         On smaller devices, especially iPhones, WebGPU benchmark runs may raise
-        memory usage enough to crash the tab.
+        memory usage enough to crash the tab. Since this page is currently
+        hosted on GitHub Pages, WebAssembly threads{' '}
+        <a
+          href="https://github.com/orgs/community/discussions/13309"
+          target="_blank"
+          rel="noreferrer"
+        >
+          cannot be enabled
+        </a>
+        . Multi-threading CPU performance is generally better, but still not as
+        fast as WebGPU on machines we've tested.
       </p>
       <div className="benchmark-controls">
         <label className="field">
