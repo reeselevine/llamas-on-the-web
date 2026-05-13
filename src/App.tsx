@@ -13,7 +13,7 @@ import {
 import { formatChat, type ChatMessage } from './chat';
 import {
   blogPost,
-  blogPostPromptSource,
+  buildPromptSource,
   renderInlineMarkdown,
 } from './blogpost';
 
@@ -145,6 +145,7 @@ const BENCHMARK_DECODE_TOKEN_COUNT = 64;
 const BENCHMARK_REPETITIONS = 1;
 const BENCHMARK_WARMUP_PREFILL_TOKENS = 2;
 const BENCHMARK_WARMUP_DECODE_TOKENS = 1;
+const REWRITE_STREAM_COMMIT_INTERVAL_MS = 150;
 const BENCHMARK_PROMPT_TEXT = Array.from({ length: 256 }, () =>
   'WebGPU keeps local inference fast, private, and close to the user.'
 ).join(' ');
@@ -171,6 +172,22 @@ const buildRewriteMessages = (
       content: `${paragraphText}\n\Rewrite this as a ${style}.`,
     },
   ];
+};
+
+const buildPromptInput = (
+  promptId: PromptSelection,
+  manualPrompt: string,
+  blogPostText: string
+) => {
+  if (promptId === 'manual') {
+    return manualPrompt;
+  }
+
+  if (promptId === 'summarize-blogpost') {
+    return `Summarize the following blog post in exactly 3 bullet points.\n\n${blogPostText}`;
+  }
+
+  return "Write a function that computes the Nth fibonacci number recursively. Give usage for n=10, but don't try to calculate results manually, and don't explain the function.";
 };
 
 function App() {
@@ -218,6 +235,7 @@ function App() {
   const [activeBenchmarkMetric, setActiveBenchmarkMetric] =
     useState<ActiveBenchmarkMetric | null>(null);
   const wllamaRef = useRef<Wllama | null>(null);
+  const { meta, nodes, footnotes } = blogPost;
 
   const selectedModel =
     DEMO_MODELS.find((model) => model.id === selectedModelId) ??
@@ -243,16 +261,12 @@ function App() {
   const selectedPromptOption = PROMPT_OPTIONS.find(
     (option) => option.id === selectedPromptId
   );
-  const currentPrompt =
-    selectedPromptId === 'manual'
-      ? manualPrompt
-      : selectedPromptId === 'summarize-blogpost'
-        ? `Summarize the following blog post in exactly 3 bullet points.\n\n${blogPostPromptSource}`
-        : "Write a function that computes the Nth fibonacci number recursively. Give usage for n=10, but don't try to calculate results manually, and don't explain the function.";
+  const promptHasContent =
+    selectedPromptId === 'manual' ? manualPrompt.trim().length > 0 : true;
   const currentPromptPreview =
     selectedPromptId === 'summarize-blogpost'
       ? 'Summarize the following blog post in exactly 3 bullet points.\n\n<blog text>'
-      : currentPrompt;
+      : buildPromptInput(selectedPromptId, manualPrompt, '');
   const isBusy = isLoadingModel || isGenerating || isRunningBenchmark;
 
   useEffect(() => {
@@ -511,15 +525,20 @@ function App() {
     setOutput('');
     setStatus('Generating output...');
     try {
+      const promptInput = buildPromptInput(
+        selectedPromptId,
+        manualPrompt,
+        buildPromptSource(nodes)
+      );
       const formattedPrompt = await formatChat(instance, [
         {
           role: 'user',
-          content: currentPrompt,
+          content: promptInput,
         },
       ]);
       console.info('[prompt] rawPrompt', {
         selectedPromptId,
-        currentPrompt,
+        currentPrompt: promptInput,
       });
       const result = await instance.createCompletion(formattedPrompt, {
         nPredict: maxOutputTokens,
@@ -738,6 +757,8 @@ function App() {
       const rewriteMessages = buildRewriteMessages(paragraphText, style);
       const formattedPrompt = await formatChat(instance, rewriteMessages);
       let streamedText = '';
+      let lastCommittedText = '';
+      let lastCommitTime = 0;
       console.info('[rewrite] rawPrompt', {
         nodeId,
         style,
@@ -752,16 +773,24 @@ function App() {
         },
         onNewToken(_token, _piece, currentText) {
           streamedText = currentText;
-          setRewriteOutputs((current) => ({
-            ...current,
-            [nodeId]: {
-              ...current[nodeId],
-              isLoading: true,
-              style,
-              text: currentText,
-              error: undefined,
-            },
-          }));
+          const now = performance.now();
+          if (
+            currentText !== lastCommittedText &&
+            now - lastCommitTime >= REWRITE_STREAM_COMMIT_INTERVAL_MS
+          ) {
+            lastCommittedText = currentText;
+            lastCommitTime = now;
+            setRewriteOutputs((current) => ({
+              ...current,
+              [nodeId]: {
+                ...current[nodeId],
+                isLoading: true,
+                style,
+                text: currentText,
+                error: undefined,
+              },
+            }));
+          }
         },
       });
       const finalText = (result.trim() || streamedText || result).trim();
@@ -825,7 +854,6 @@ function App() {
   const cachedDemoModels = DEMO_MODELS.filter((model) =>
     cachedModelUrls.includes(model.modelUrl)
   );
-  const { meta, nodes, footnotes } = blogPost;
   const footnoteNumbersById = new Map(
     footnotes.map((footnote) => [footnote.id, footnote.number] as const)
   );
@@ -1501,7 +1529,7 @@ function App() {
                 disabled={
                   isBusy ||
                   loadedModelId !== activeModel.id ||
-                  !currentPrompt.trim()
+                  !promptHasContent
                 }
               >
                 {isGenerating ? 'Generating...' : 'Run prompt'}

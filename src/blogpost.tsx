@@ -325,7 +325,7 @@ const renderInlineMarkdown = (
     });
 };
 
-const buildPromptSource = (nodes: BlogNode[]) =>
+export const buildPromptSource = (nodes: BlogNode[]) =>
   nodes
     .map((node) => {
       if (node.type === 'heading') {
@@ -348,5 +348,4 @@ const buildPromptSource = (nodes: BlogNode[]) =>
     .trim();
 
 export const blogPost = parseBlogPost(rawBlogpost);
-export const blogPostPromptSource = buildPromptSource(blogPost.nodes);
 export { renderInlineMarkdown };
