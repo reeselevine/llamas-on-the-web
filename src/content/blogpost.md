@@ -37,7 +37,7 @@ Try rewriting the paragraph above using a local LLM. And if you're entertained o
 
 ### Functionality
 
-As of today, the WebGPU backend supports most of the recent open-weight models, from transformer-based models like Gemma, Qwen, and Llama, to hybrid models like Granite and LFM2, to even experimental 1-bit models like Bonsai. We also support most llama.cpp weight formats, including 32-bit and 16-bit float types, traditional quantization types like q4\_0 and q8\_0, K-quants, and I-quants, allowing you to pick the right model size for your use-case.
+As of today, the WebGPU backend supports most recent open-weight models, from transformer-based models like Gemma, Qwen, and Llama, to hybrid models like Granite and LFM2, to even experimental 1-bit models like Bonsai. We also support most llama.cpp weight formats, including 32-bit and 16-bit float types, traditional quantization types like q4\_0 and q8\_0, K-quants, and I-quants, allowing you to pick the right model size for your use-case.
 
 Given that WebGPU is still new, there are no mature, portable, and performant libraries for linear algebra routines in WebGPU, such as NVIDIA's [cuBLAS](https://developer.nvidia.com/cublas). Thus, we wrote the WebGPU backend in llama.cpp from the ground up, developing custom WGSL kernels for matrix multiplication, FlashAttention, and all the other important machine learning operations. We have also worked hard to make sure our implementation is as memory-efficient as possible, avoiding overhead and enabling as powerful a model as possible to run on whatever hardware a user has available.
 
@@ -82,4 +82,4 @@ Several outside contributors have also made significant contributions to the Web
 
 The default model used here is Gemma-3, specifically a 270M parameter Unsloth Q4\_K\_M quantized version. The reason we chose this model is that it is small enough to be loaded on many mobile phones and downloads fairly quickly. However, we had to tailor the demos here to things that come across reasonably well with such a small model. If you looked at the advanced usage section in the model loader, you might have noticed that if you were on a larger machine, you could use a Q4\_K version of Qwen 3.5 2B, or choose any model from a Hugging Face repository. Generally, larger and more recent models will feel more capable, at the expense of longer download times and less portability.
 
-[^wllama]: This package is currently a fork of wllama, but WebGPU support is being integrated into the upstream package as well as part of its large refactor supporting multimodal models.
+[^wllama]: This package is currently a fork of wllama, but WebGPU support is being integrated into the upstream package as well as part of its large refactor to support multimodal models.

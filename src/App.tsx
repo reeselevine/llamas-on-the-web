@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   isValidGgufFile,
   ModelManager,
@@ -149,9 +149,6 @@ const BENCHMARK_WARMUP_PREFILL_TOKENS = 2;
 const BENCHMARK_WARMUP_DECODE_TOKENS = 1;
 const MAIN_STREAM_COMMIT_INTERVAL_MS = 150;
 const REWRITE_STREAM_COMMIT_INTERVAL_MS = 150;
-const BENCHMARK_PROMPT_TEXT = Array.from({ length: 256 }, () =>
-  'WebGPU keeps local inference fast, private, and close to the user.'
-).join(' ');
 
 const toTokensPerSecond = (tokens: number, elapsedMs: number) =>
   elapsedMs > 0 ? (tokens * 1000) / elapsedMs : 0;
@@ -258,6 +255,77 @@ const buildSummaryPromptSource = (nodes: BlogNode[], isIPhone: boolean) => {
   return buildPromptSource(summaryNodes);
 };
 
+const { meta: BLOG_META, nodes: BLOG_NODES, footnotes: BLOG_FOOTNOTES } =
+  blogPost;
+const FOOTNOTE_NUMBERS_BY_ID = new Map(
+  BLOG_FOOTNOTES.map((footnote) => [footnote.id, footnote.number] as const)
+);
+const FIRST_HEADING_INDEX = BLOG_NODES.findIndex(
+  (node) => node.type === 'heading'
+);
+const INTRO_NODES =
+  FIRST_HEADING_INDEX === -1
+    ? BLOG_NODES
+    : BLOG_NODES.slice(0, FIRST_HEADING_INDEX);
+const ARTICLE_NODES =
+  FIRST_HEADING_INDEX === -1 ? [] : BLOG_NODES.slice(FIRST_HEADING_INDEX);
+
+const StaticArticleNode = memo(function StaticArticleNode({
+  node,
+  index,
+}: {
+  node: BlogNode;
+  index: number;
+}) {
+  if (node.type === 'heading') {
+    return (
+      <section
+        key={`heading-${index}`}
+        className={`article-block ${
+          node.level === 2 ? 'article-heading' : 'article-subheading'
+        }`}
+      >
+        {node.level === 2 ? <h2>{node.text}</h2> : <h3>{node.text}</h3>}
+      </section>
+    );
+  }
+
+  if (node.type === 'paragraph') {
+    return (
+      <section
+        key={`paragraph-${index}`}
+        className="article-block article-paragraph"
+      >
+        <p>{renderInlineMarkdown(node.text, FOOTNOTE_NUMBERS_BY_ID)}</p>
+      </section>
+    );
+  }
+
+  if (node.type === 'callout') {
+    return (
+      <section key={`callout-${index}`} className="article-block article-callout">
+        <div className="callout-box">
+          <p>{renderInlineMarkdown(node.text, FOOTNOTE_NUMBERS_BY_ID)}</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (node.type !== 'links') {
+    return null;
+  }
+
+  return (
+    <section key={`links-${index}`} className="article-block article-links">
+      <div className="links-box">
+        {node.items.map((item, itemIndex) => (
+          <p key={itemIndex}>{renderInlineMarkdown(item, FOOTNOTE_NUMBERS_BY_ID)}</p>
+        ))}
+      </div>
+    </section>
+  );
+});
+
 function App() {
   const isIPhone = isIOSBrowser();
   const defaultContextLength = isIPhone ? 1024 : 2048;
@@ -311,7 +379,6 @@ function App() {
   const [activeBenchmarkMetric, setActiveBenchmarkMetric] =
     useState<ActiveBenchmarkMetric | null>(null);
   const wllamaRef = useRef<Wllama | null>(null);
-  const { meta, nodes, footnotes } = blogPost;
 
   useEffect(() => {
     setContextLengthInput(String(contextLength));
@@ -341,9 +408,6 @@ function App() {
     qwenModel?.sizeBytes &&
     effectiveWebGPUMemoryBudget &&
     qwenModel.sizeBytes > effectiveWebGPUMemoryBudget
-  );
-  const selectedPromptOption = PROMPT_OPTIONS.find(
-    (option) => option.id === selectedPromptId
   );
   const promptHasContent =
     selectedPromptId === 'manual' ? manualPrompt.trim().length > 0 : true;
@@ -612,7 +676,7 @@ function App() {
       const promptInput = buildPromptInput(
         selectedPromptId,
         manualPrompt,
-        buildSummaryPromptSource(nodes, isIPhone)
+        buildSummaryPromptSource(BLOG_NODES, isIPhone)
       );
       const formattedPrompt = await formatChat(instance, [
         {
@@ -708,9 +772,7 @@ function App() {
           },
         })),
         warning:
-          benchmarkSelection === 'both' && webgpuSupported
-            ? 'Running CPU and WebGPU back-to-back can raise memory usage and crash the tab on smaller devices. Reload the page to run them separately if needed.'
-            : !webgpuSupported && benchmarkSelection !== 'cpu'
+          !webgpuSupported && benchmarkSelection !== 'cpu'
               ? 'WebGPU is not available in this browser, so only the CPU benchmark can be run.'
               : undefined,
       });
@@ -957,14 +1019,6 @@ function App() {
   const cachedDemoModels = DEMO_MODELS.filter((model) =>
     cachedModelUrls.includes(model.modelUrl)
   );
-  const footnoteNumbersById = new Map(
-    footnotes.map((footnote) => [footnote.id, footnote.number] as const)
-  );
-  const firstHeadingIndex = nodes.findIndex((node) => node.type === 'heading');
-  const introNodes =
-    firstHeadingIndex === -1 ? nodes : nodes.slice(0, firstHeadingIndex);
-  const articleNodes =
-    firstHeadingIndex === -1 ? [] : nodes.slice(firstHeadingIndex);
   const isActiveModelLoaded = loadedModelId === activeModel.id;
   const benchmarkDisplayBackends = getBenchmarkBackends(
     hasWebGPUSupport(),
@@ -1014,6 +1068,12 @@ function App() {
     cpuBenchmarkRun?.decode.tokensPerSecond ?? 0,
     webgpuBenchmarkRun?.decode.tokensPerSecond ?? 0
   );
+  const benchmarkRunLabel = (run: BenchmarkRunResult) =>
+    run.backend === 'cpu'
+      ? run.threadLabel
+        ? `CPU (${run.threadLabel})`
+        : 'CPU'
+      : 'WebGPU';
 
   const renderInlineLoadModelButton = (label = 'Load model') => (
     <button
@@ -1069,6 +1129,10 @@ function App() {
         Prefill measures the speed at which the model can process the prompt and prepare for generation, while
         decode measures the speed at which the model can generate tokens.
       </p>
+      <p className="advanced-warning benchmark-note">
+        On smaller devices, especially iPhones, WebGPU benchmark runs may raise
+        memory usage enough to crash the tab.
+      </p>
       <div className="benchmark-controls">
         <label className="field">
           <span>Benchmark mode</span>
@@ -1087,86 +1151,69 @@ function App() {
           </select>
         </label>
       </div>
-      {benchmarkSelection === 'both' && hasWebGPUSupport() ? (
-        <p className="advanced-warning benchmark-note">
-          Running CPU and WebGPU back-to-back can raise memory usage and crash
-          the tab on smaller devices. Reload the page to run them separately if
-          needed.
-        </p>
-      ) : null}
       <>
           <div className="benchmark-chart">
             <div className="benchmark-chart-group">
               <div className="benchmark-chart-header">
                 <span className="runtime-label">Prefill</span>
-                <span>{cpuBenchmarkRun?.prefill.tokens ?? webgpuBenchmarkRun?.prefill.tokens ?? 256} tokens</span>
-              </div>
-              <div className="benchmark-bar-row">
                 <span>
-                  {cpuBenchmarkRun?.threadLabel
-                    ? `CPU (${cpuBenchmarkRun.threadLabel})`
-                    : 'CPU'}
+                  {benchmarkDisplayRuns[0]?.prefill.tokens ?? 256} tokens
                 </span>
-                <div className="benchmark-bar-track" aria-hidden="true">
-                  <div
-                    className="benchmark-bar-fill cpu-fill"
-                    style={{
-                      width: `${maxPrefillTokensPerSecond > 0 && cpuBenchmarkRun ? (cpuBenchmarkRun.prefill.tokensPerSecond / maxPrefillTokensPerSecond) * 100 : 0}%`,
-                    }}
-                  />
-                </div>
-                <strong>{formatBenchmarkMetricText(cpuBenchmarkRun, 'prefill')}</strong>
               </div>
-              {webgpuBenchmarkRun ? (
+              {benchmarkDisplayRuns.map((run) => (
                 <div className="benchmark-bar-row">
-                  <span>WebGPU</span>
+                  <span>{benchmarkRunLabel(run)}</span>
                   <div className="benchmark-bar-track" aria-hidden="true">
                     <div
-                      className="benchmark-bar-fill gpu-fill"
+                      className={`benchmark-bar-fill ${
+                        run.backend === 'cpu' ? 'cpu-fill' : 'gpu-fill'
+                      }`}
                       style={{
-                        width: `${maxPrefillTokensPerSecond > 0 ? (webgpuBenchmarkRun.prefill.tokensPerSecond / maxPrefillTokensPerSecond) * 100 : 0}%`,
+                        width: `${
+                          maxPrefillTokensPerSecond > 0
+                            ? (run.prefill.tokensPerSecond /
+                                maxPrefillTokensPerSecond) *
+                              100
+                            : 0
+                        }%`,
                       }}
                     />
                   </div>
-                  <strong>{formatBenchmarkMetricText(webgpuBenchmarkRun, 'prefill')}</strong>
+                  <strong>{formatBenchmarkMetricText(run, 'prefill')}</strong>
                 </div>
-              ) : null}
+              ))}
             </div>
             <div className="benchmark-chart-group">
               <div className="benchmark-chart-header">
                 <span className="runtime-label">Decode</span>
-                <span>{cpuBenchmarkRun?.decode.tokens ?? webgpuBenchmarkRun?.decode.tokens ?? BENCHMARK_DECODE_TOKEN_COUNT} tokens</span>
-              </div>
-              <div className="benchmark-bar-row">
                 <span>
-                  {cpuBenchmarkRun?.threadLabel
-                    ? `CPU (${cpuBenchmarkRun.threadLabel})`
-                    : 'CPU'}
+                  {benchmarkDisplayRuns[0]?.decode.tokens ??
+                    BENCHMARK_DECODE_TOKEN_COUNT}{' '}
+                  tokens
                 </span>
-                <div className="benchmark-bar-track" aria-hidden="true">
-                  <div
-                    className="benchmark-bar-fill cpu-fill"
-                    style={{
-                      width: `${maxDecodeTokensPerSecond > 0 && cpuBenchmarkRun ? (cpuBenchmarkRun.decode.tokensPerSecond / maxDecodeTokensPerSecond) * 100 : 0}%`,
-                    }}
-                  />
-                </div>
-                <strong>{formatBenchmarkMetricText(cpuBenchmarkRun, 'decode')}</strong>
               </div>
-              {webgpuBenchmarkRun ? (
+              {benchmarkDisplayRuns.map((run) => (
                 <div className="benchmark-bar-row">
-                  <span>WebGPU</span>
+                  <span>{benchmarkRunLabel(run)}</span>
                   <div className="benchmark-bar-track" aria-hidden="true">
                     <div
-                      className="benchmark-bar-fill gpu-fill"
+                      className={`benchmark-bar-fill ${
+                        run.backend === 'cpu' ? 'cpu-fill' : 'gpu-fill'
+                      }`}
                       style={{
-                        width: `${maxDecodeTokensPerSecond > 0 ? (webgpuBenchmarkRun.decode.tokensPerSecond / maxDecodeTokensPerSecond) * 100 : 0}%`,
+                        width: `${
+                          maxDecodeTokensPerSecond > 0
+                            ? (run.decode.tokensPerSecond /
+                                maxDecodeTokensPerSecond) *
+                              100
+                            : 0
+                        }%`,
                       }}
                     />
                   </div>
-                  <strong>{formatBenchmarkMetricText(webgpuBenchmarkRun, 'decode')}</strong>
+                  <strong>{formatBenchmarkMetricText(run, 'decode')}</strong>
                 </div>
-              ) : null}
+              ))}
             </div>
           </div>
           {prefillSpeedup && decodeSpeedup ? (
@@ -1186,55 +1233,14 @@ function App() {
     </div>
   );
 
-  const renderArticleNode = (node: (typeof nodes)[number], index: number) => {
-    if (node.type === 'heading') {
-      return (
-        <section
-          key={`heading-${index}`}
-          className={`article-block ${node.level === 2 ? 'article-heading' : 'article-subheading'}`}
-        >
-          {node.level === 2 ? <h2>{node.text}</h2> : <h3>{node.text}</h3>}
-        </section>
-      );
-    }
-
-    if (node.type === 'paragraph') {
-      return (
-        <section
-          key={`paragraph-${index}`}
-          className="article-block article-paragraph"
-        >
-          <p>{renderInlineMarkdown(node.text, footnoteNumbersById)}</p>
-        </section>
-      );
-    }
-
-    if (node.type === 'callout') {
-      return (
-        <section
-          key={`callout-${index}`}
-          className="article-block article-callout"
-        >
-          <div className="callout-box">
-            <p>{renderInlineMarkdown(node.text, footnoteNumbersById)}</p>
-          </div>
-        </section>
-      );
-    }
-
-    if (node.type === 'links') {
-      return (
-        <section
-          key={`links-${index}`}
-          className="article-block article-links"
-        >
-          <div className="links-box">
-            {node.items.map((item, itemIndex) => (
-              <p key={itemIndex}>{renderInlineMarkdown(item, footnoteNumbersById)}</p>
-            ))}
-          </div>
-        </section>
-      );
+  const renderArticleNode = (node: BlogNode, index: number) => {
+    if (
+      node.type === 'heading' ||
+      node.type === 'paragraph' ||
+      node.type === 'callout' ||
+      node.type === 'links'
+    ) {
+      return <StaticArticleNode key={`${node.type}-${index}`} node={node} index={index} />;
     }
 
     if (node.type === 'benchmark') {
@@ -1263,7 +1269,7 @@ function App() {
             {rewriteState?.text ? (
               <p className="rewrite-rendered">{displayedText}</p>
             ) : (
-              <p>{renderInlineMarkdown(node.text, footnoteNumbersById)}</p>
+              <p>{renderInlineMarkdown(node.text, FOOTNOTE_NUMBERS_BY_ID)}</p>
             )}
           </div>
           <aside className="rewrite-sidebar">
@@ -1343,10 +1349,14 @@ function App() {
 
     return (
       <section key={`demo-${index}`} className="article-block article-demo">
-        <div className="demo-placeholder">
-          <p className="section-label">Live Demo</p>
-          <p>The first time you run this demo, it will download a small model that will run on your device. After that, the model will be cached for future use (try it in airplane mode or wifi turned off!).</p>
-          <div className="demo-controls">
+          <div className="demo-placeholder">
+            <p className="section-label">Live Demo</p>
+            <p>The first time you run this demo, it will download a small model that will run on your device. After that, the model will be cached for future use (try it in airplane mode or wifi turned off!).</p>
+            <p className="advanced-warning">
+              More memory-intensive tasks like the summarization task
+              may crash the page on smaller devices such as iPhones, where Safari limits memory usage.
+            </p>
+            <div className="demo-controls">
             <div className="default-model-card">
               <span className="runtime-label">
                 {selectedModelId === DEFAULT_DEMO_MODEL_ID
@@ -1746,10 +1756,12 @@ function App() {
   return (
     <div className="page-shell">
       <header className="blog-header">
-        <h1>{meta.title}</h1>
-        {meta.subtitle ? <p className="blog-subtitle">{meta.subtitle}</p> : null}
+        <h1>{BLOG_META.title}</h1>
+        {BLOG_META.subtitle ? (
+          <p className="blog-subtitle">{BLOG_META.subtitle}</p>
+        ) : null}
         <div className="byline">
-          {meta.byline.map((item) => (
+          {BLOG_META.byline.map((item) => (
             <span key={item}>{item}</span>
           ))}
         </div>
@@ -1757,22 +1769,25 @@ function App() {
 
       <main className="blog-layout">
         <article className="blog-article">
-          {introNodes.length > 0 ? (
+          {INTRO_NODES.length > 0 ? (
             <div className="blog-intro">
-              {introNodes.map((node, index) => renderArticleNode(node, index))}
+              {INTRO_NODES.map((node, index) => renderArticleNode(node, index))}
             </div>
           ) : null}
 
-          {articleNodes.map((node, index) =>
-            renderArticleNode(node, introNodes.length + index)
+          {ARTICLE_NODES.map((node, index) =>
+            renderArticleNode(node, INTRO_NODES.length + index)
           )}
-          {footnotes.length > 0 ? (
+          {BLOG_FOOTNOTES.length > 0 ? (
             <section className="article-block article-footnotes">
               <h3>Footnotes</h3>
               <ol className="footnote-list">
-                {footnotes.map((footnote) => (
+                {BLOG_FOOTNOTES.map((footnote) => (
                   <li key={footnote.id} id={`footnote-${footnote.number}`}>
-                    {renderInlineMarkdown(footnote.text, footnoteNumbersById)}
+                    {renderInlineMarkdown(
+                      footnote.text,
+                      FOOTNOTE_NUMBERS_BY_ID
+                    )}
                   </li>
                 ))}
               </ol>
