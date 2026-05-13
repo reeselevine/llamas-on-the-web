@@ -112,6 +112,7 @@ type BenchmarkMetrics = {
   tokensPerSecond: number;
 };
 type BenchmarkBackend = 'cpu' | 'webgpu';
+type BenchmarkSelection = 'cpu' | 'webgpu' | 'both';
 type BenchmarkRunResult = {
   backend: BenchmarkBackend;
   backendLabel: string;
@@ -146,6 +147,7 @@ const BENCHMARK_DECODE_TOKEN_COUNT = 64;
 const BENCHMARK_REPETITIONS = 1;
 const BENCHMARK_WARMUP_PREFILL_TOKENS = 2;
 const BENCHMARK_WARMUP_DECODE_TOKENS = 1;
+const MAIN_STREAM_COMMIT_INTERVAL_MS = 150;
 const REWRITE_STREAM_COMMIT_INTERVAL_MS = 150;
 const BENCHMARK_PROMPT_TEXT = Array.from({ length: 256 }, () =>
   'WebGPU keeps local inference fast, private, and close to the user.'
@@ -197,11 +199,30 @@ const SUMMARY_SUBSECTION_TITLES = new Set([
   'Performance',
   'Future Work and Technical Report',
 ]);
+const IPHONE_SUMMARY_SUBSECTION_TITLES = new Set(['Functionality']);
 
-const buildSummaryPromptSource = (nodes: BlogNode[]) => {
+const getBenchmarkBackends = (
+  webgpuSupported: boolean,
+  selection: BenchmarkSelection
+): BenchmarkBackend[] => {
+  if (selection === 'cpu') {
+    return ['cpu'];
+  }
+
+  if (selection === 'webgpu') {
+    return webgpuSupported ? ['webgpu'] : [];
+  }
+
+  return webgpuSupported ? ['cpu', 'webgpu'] : ['cpu'];
+};
+
+const buildSummaryPromptSource = (nodes: BlogNode[], isIPhone: boolean) => {
   const summaryNodes: BlogNode[] = [];
   let inSummarySection = false;
   let includeCurrentSubsection = true;
+  const includedSubsections = isIPhone
+    ? IPHONE_SUMMARY_SUBSECTION_TITLES
+    : SUMMARY_SUBSECTION_TITLES;
 
   for (const node of nodes) {
     if (node.type === 'heading' && node.level === 2) {
@@ -222,7 +243,7 @@ const buildSummaryPromptSource = (nodes: BlogNode[]) => {
     }
 
     if (node.type === 'heading' && node.level === 3) {
-      includeCurrentSubsection = SUMMARY_SUBSECTION_TITLES.has(node.text);
+      includeCurrentSubsection = includedSubsections.has(node.text);
       if (includeCurrentSubsection) {
         summaryNodes.push(node);
       }
@@ -238,9 +259,13 @@ const buildSummaryPromptSource = (nodes: BlogNode[]) => {
 };
 
 function App() {
+  const isIPhone = isIOSBrowser();
+  const defaultContextLength = isIPhone ? 1024 : 2048;
   const [selectedModelId, setSelectedModelId] = useState(DEFAULT_DEMO_MODEL_ID);
-  const [contextLength, setContextLength] = useState(2048);
-  const [contextLengthInput, setContextLengthInput] = useState('4096');
+  const [contextLength, setContextLength] = useState(defaultContextLength);
+  const [contextLengthInput, setContextLengthInput] = useState(
+    String(defaultContextLength)
+  );
   const [maxOutputTokens, setMaxOutputTokens] = useState(1024);
   const [maxOutputTokensInput, setMaxOutputTokensInput] = useState('1024');
   const [selectedPromptId, setSelectedPromptId] = useState<PromptSelection>(
@@ -281,6 +306,8 @@ function App() {
     null
   );
   const [benchmarkError, setBenchmarkError] = useState('');
+  const [benchmarkSelection, setBenchmarkSelection] =
+    useState<BenchmarkSelection>('both');
   const [activeBenchmarkMetric, setActiveBenchmarkMetric] =
     useState<ActiveBenchmarkMetric | null>(null);
   const wllamaRef = useRef<Wllama | null>(null);
@@ -585,7 +612,7 @@ function App() {
       const promptInput = buildPromptInput(
         selectedPromptId,
         manualPrompt,
-        buildSummaryPromptSource(nodes)
+        buildSummaryPromptSource(nodes, isIPhone)
       );
       const formattedPrompt = await formatChat(instance, [
         {
@@ -597,6 +624,9 @@ function App() {
         selectedPromptId,
         currentPrompt: promptInput,
       });
+      let streamedText = '';
+      let lastCommittedText = '';
+      let lastCommitTime = 0;
       const result = await instance.createCompletion(formattedPrompt, {
         nPredict: maxOutputTokens,
         sampling: {
@@ -605,10 +635,19 @@ function App() {
           top_p: 0.9,
         },
         onNewToken(_token, _piece, currentText) {
-          setOutput(currentText);
+          streamedText = currentText;
+          const now = performance.now();
+          if (
+            currentText !== lastCommittedText &&
+            now - lastCommitTime >= MAIN_STREAM_COMMIT_INTERVAL_MS
+          ) {
+            lastCommittedText = currentText;
+            lastCommitTime = now;
+            setOutput(currentText);
+          }
         },
       });
-      setOutput(result);
+      setOutput(result.trim() || streamedText || result);
       setStatus('Generation complete.');
     } catch (error) {
       console.error(error);
@@ -631,9 +670,13 @@ function App() {
     const webgpuSupported = hasWebGPUSupport();
 
     try {
-      const benchmarkBackends: BenchmarkBackend[] = webgpuSupported
-        ? ['cpu', 'webgpu']
-        : ['cpu'];
+      const benchmarkBackends = getBenchmarkBackends(
+        webgpuSupported,
+        benchmarkSelection
+      );
+      if (benchmarkBackends.length === 0) {
+        throw new Error('WebGPU is not available in this browser.');
+      }
       const benchmarkLoadConfig = {
         nCtx: contextLength,
         nBatch: 256,
@@ -664,9 +707,12 @@ function App() {
             tokensPerSecond: 0,
           },
         })),
-        warning: webgpuSupported
-          ? undefined
-          : 'WebGPU is not available in this browser, so only the CPU benchmark was run.',
+        warning:
+          benchmarkSelection === 'both' && webgpuSupported
+            ? 'Running CPU and WebGPU back-to-back can raise memory usage and crash the tab on smaller devices. Reload the page to run them separately if needed.'
+            : !webgpuSupported && benchmarkSelection !== 'cpu'
+              ? 'WebGPU is not available in this browser, so only the CPU benchmark can be run.'
+              : undefined,
       });
 
       for (const backend of benchmarkBackends) {
@@ -920,11 +966,13 @@ function App() {
   const articleNodes =
     firstHeadingIndex === -1 ? [] : nodes.slice(firstHeadingIndex);
   const isActiveModelLoaded = loadedModelId === activeModel.id;
+  const benchmarkDisplayBackends = getBenchmarkBackends(
+    hasWebGPUSupport(),
+    benchmarkSelection
+  );
   const benchmarkDisplayRuns =
     benchmarkResult?.runs ??
-    (hasWebGPUSupport()
-      ? (['cpu', 'webgpu'] as BenchmarkBackend[])
-      : (['cpu'] as BenchmarkBackend[])).map((backend) => ({
+    benchmarkDisplayBackends.map((backend) => ({
         backend,
         backendLabel: getBenchmarkBackendLabel(backend),
         threadLabel: undefined,
@@ -1021,6 +1069,31 @@ function App() {
         Prefill measures the speed at which the model can process the prompt and prepare for generation, while
         decode measures the speed at which the model can generate tokens.
       </p>
+      <div className="benchmark-controls">
+        <label className="field">
+          <span>Benchmark mode</span>
+          <select
+            value={benchmarkSelection}
+            onChange={(event) =>
+              setBenchmarkSelection(event.target.value as BenchmarkSelection)
+            }
+            disabled={isBusy}
+          >
+            <option value="both">CPU + WebGPU</option>
+            <option value="cpu">CPU only</option>
+            <option value="webgpu" disabled={!hasWebGPUSupport()}>
+              WebGPU only
+            </option>
+          </select>
+        </label>
+      </div>
+      {benchmarkSelection === 'both' && hasWebGPUSupport() ? (
+        <p className="advanced-warning benchmark-note">
+          Running CPU and WebGPU back-to-back can raise memory usage and crash
+          the tab on smaller devices. Reload the page to run them separately if
+          needed.
+        </p>
+      ) : null}
       <>
           <div className="benchmark-chart">
             <div className="benchmark-chart-group">
